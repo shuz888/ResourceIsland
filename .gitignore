@@ -1,0 +1,5 @@
+.idea/
+.mise.toml
+.vscode/
+__pycache__/
+*.pyc
