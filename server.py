@@ -161,13 +161,14 @@ class Game:
         await self._player_resp.put((player,data))
 
     async def _collect_players_data(self,x:str):
-        datas:List[Dict] = []
-        while datas.__len__() < self.state.players.__len__():
-            print(datas)
-            data = await self._player_resp.get()
-            if data[1]['type'] == x:
-                datas.append(data[1])
-        return datas
+        data = await self._player_resp.get()
+        if data[1]['type'] == x:
+            return data[1]
+        else :
+            return await self._collect_players_data(x)
+
+    async def send_to(self,player:str,data:Dict):
+        await self.state.players[player].ws.send_json(data)
 
     async def _handle_investment(self):
         """
@@ -182,42 +183,49 @@ class Game:
             'type': 'investment',
             'data': {
                 'player': '',
-                'investment': [1,{'3':'xxx'},{'5':'0x5'},{'6':[1,2,3]}],
+                'investment': '1', # {'3':'xxx'},{'5':'0x5'},{'6':[1,2,3]},'ok'
             }
         }
         :return:
         """
-        data = await self._collect_players_data("investment")
         self.phase = 1
-        for data in data:
-            already_exchanged = False
-            already_mined = False
+        already = defaultdict(bool)
+        already_exchanged = False
+        already_mined = False
+        while True:
+            data = await self._collect_players_data('investment')
+            flag = False
+            for x in self.state.players.keys():
+                if not already[x]:
+                    flag=True
+            if not flag:
+                return True
             player = data['data']['player']
             if len(set(self.state.market)) == 1 and self.state.market:
-                await self.broadcast({"type":"notify","target":{"type":"market_error"}})
+                await self.send_to(player,{"type":"notify","target":{"type":"market_error"}})
                 self.state.current_deck.extend(self.state.market)
                 self.state.market = []
             if not self.state.market:
-                await self.broadcast({"type":"notify","target":{"type":"market_empty"}})
+                await self.send_to(player,{"type":"notify","target":{"type":"market_empty"}})
                 for k in self.state.players.keys():
                     if self.state.players[k].action_points:
                         self.state.players[k].action_points -= 1
                         self.state.market.extend(await self._draw_cards(2))
             if "农场" in self.state.players[player].buildings:
-                await self.broadcast({"type":"notify","target":{"type":"building_worked","player":player,"building":"农场"}})
+                await self.send_to(player,{"type":"notify","target":{"type":"building_worked","player":player,"building":"农场"}})
                 self.state.players[player].action_points += 2
                 already_exchanged = True
             if "无敌农场" in self.state.players[player].buildings:
-                await self.broadcast({"type":"notify","target":{"type":"building_worked","player":player,"building":"无敌农场"}})
+                await self.send_to(player,{"type":"notify","target":{"type":"building_worked","player":player,"building":"无敌农场"}})
                 self.state.players[player].action_points += 5
                 already_exchanged = True
             if "伐木场" in self.state.players[player].buildings:
-                await self.broadcast({"type":"notify","target":{"type":"building_worked","player":player,"building":"伐木场"}})
+                await self.send_to(player,{"type":"notify","target":{"type":"building_worked","player":player,"building":"伐木场"}})
                 if "木材" in self.state.market:
                     self.state.players[player].resources['木材'] +=1
                     self.state.market.remove("木材")
             if "高级伐木场" in self.state.players[player].buildings:
-                await self.broadcast({"type":"notify","target":{"type":"building_worked","player":player,"building":"高级伐木场"}})
+                await self.send_to(player,{"type":"notify","target":{"type":"building_worked","player":player,"building":"高级伐木场"}})
                 if self.state.current_deck.count("木材") <2:
                     self.state.players[player].resources['木材'] +=2
                     self.state.current_deck.remove("木材")
@@ -231,140 +239,142 @@ class Game:
             #             ['6', '挖矿',0],
             #             ['7', '铁镐',0],
             #             ],headers=["编号","操作","消耗"]
-            for action in data["data"]["investment"]:
-                if action == '1':
-                    if self.state.players[player].action_points <1:
-                        await self.broadcast({"type": "error", "target": {"type":"investment_error","player": player,"action": action,"reason":1}})
-                        continue
-                    self.state.players[player].action_points -= 1
-                    self.state.market.extend(await self._draw_cards(2))
-                    await self.broadcast({"type": "notify", "target": {"type": "investment_success", "player": player,
-                                                                       "action": action}})
-                elif action == '2':
-                    if self.state.players[player].resources['食物'] < 1:
-                        await self.broadcast({"type": "error", "target": {"type":"investment_error","player": player,"action": action,"reason":1}})
-                        continue
-                    if already_exchanged:
-                        continue
-                    self.state.players[player].resources['食物'] -= 1
-                    self.state.players[player].action_points += 2
-                    self.state.current_deck.append('食物')
-                    await self.broadcast({"type": "notify", "target": {"type": "investment_success", "player": player,
-                                                                       "action": action}})
-                elif isinstance(action,dict) and action.__contains__("3"):
-                    if self.state.players[player].action_points < 3:
-                        await self.broadcast({"type": "error",
-                                              "target": {"type": "investment_error", "player": player, "action": action,
-                                                         "reason": 1}})
-                        continue
-                    self.state.players[player].action_points -= 3
-                    building = action['3']
-                    if building not in self.all_buildings:
-                        await self.broadcast({"type": "error", "target": {"type":"investment_error","player": player,"action": action,"reason":2}})
-                        continue
-                    else :
-                        if not self._process_build(player,building):
-                            await self.broadcast({"type": "error",
-                                                  "target": {"type": "investment_error", "player": player, "action": action,
-                                                             "reason": 1}})
-                            self.state.players[player].action_points += 3
-                elif action == '4':
-                    if self.state.players[player].action_points < 1:
-                        await self.broadcast({"type": "error",
-                                              "target": {"type": "investment_error", "player": player, "action": action,
-                                                         "reason": 1}})
-                        continue
-                    if self.state.players[player].resources['矿石'] < 1:
-                        await self.broadcast({"type": "error", "target": {"type":"investment_error","player": player,"action": action,"reason":1}})
-                        continue
-                    self.state.players[player].action_points -= 1
-                    self.state.players[player].resources['矿石'] -= 1
-                    award = random.choice(self.ore_choices)
-                    if award == '无':
-                        await self.broadcast({"type": "notify", "target": {"type": "investment_success", "player": player,
-                                                                           "action": action}})
-                        continue
-                    self.state.players[player].resources[award] += 1
-                    self.state.current_deck.remove(award)
-                    self.state.current_deck.append("矿石")
-                    await self.broadcast({"type": "notify", "target": {"type": "investment_success", "player": player,
-                                                                       "action": action}})
-                elif isinstance(action,dict) and action.__contains__("5"):
-                    if "银行" not in self.state.players[player].buildings:
-                        await self.broadcast({"type": "error", "target": {"type":"investment_error","player": player,"action": action,"reason":1}})
-                        continue
-                    item = action['5'].split('x')[0]
-                    amount = action['5'].split('x')[1]
-                    if self.state.players[player].resources[item] < amount:
-                        await self.broadcast({"type": "error", "target": {"type":"investment_error","player": player,"action": action,"reason":1}})
-                        continue
-                    value = self.state.players[player].resources[item] * \
-                        self.state.resource_values[item]
-                    value *= amount
-                    self.state.players[player].bank_money += value
-                    self.state.players[player].resources[item] -= amount
-                    await self.broadcast({"type": "notify", "target": {"type": "investment_success", "player": player,
-                                                                       "action": action}})
-                elif isinstance(action,dict) and action.__contains__("6"):
-                    if "矿机" in self.state.players[player].buildings:
-                        if len(action['6']) >3:
-                            await self.broadcast({"type": "error",
-                                                  "target": {"type": "investment_error", "player": player, "action": action,
-                                                             "reason": 5}})
+            action = data['data']['investment']
+            if action == 'ok':
+                already[player] = True
+                continue
+            elif action == '1':
+                if self.state.players[player].action_points <1:
+                    await self.send_to(player,{"type": "error", "target": {"type":"investment_error","player": player,"action": action,"reason":1}})
+                    return False
+                self.state.players[player].action_points -= 1
+                self.state.market.extend(await self._draw_cards(2))
+                await self.send_to(player,{"type": "notify", "target": {"type": "investment_success", "player": player,
+                                                                    "action": action}})
+            elif action == '2':
+                if self.state.players[player].resources['食物'] < 1:
+                    await self.send_to(player,{"type": "error", "target": {"type":"investment_error","player": player,"action": action,"reason":1}})
+                    return False
+                if already_exchanged:
+                    return False
+                self.state.players[player].resources['食物'] -= 1
+                self.state.players[player].action_points += 2
+                self.state.current_deck.append('食物')
+                await self.send_to(player,{"type": "notify", "target": {"type": "investment_success", "player": player,
+                                                                    "action": action}})
+            elif isinstance(action,dict) and action.__contains__("3"):
+                if self.state.players[player].action_points < 3:
+                    await self.send_to(player,{"type": "error",
+                                            "target": {"type": "investment_error", "player": player, "action": action,
+                                                        "reason": 1}})
+                    return False
+                self.state.players[player].action_points -= 3
+                building = action['3']
+                if building not in self.all_buildings:
+                    await self.send_to(player,{"type": "error", "target": {"type":"investment_error","player": player,"action": action,"reason":2}})
+                    return False
+                else :
+                    if not self._process_build(player,building):
+                        await self.send_to(player,{"type": "error",
+                                                "target": {"type": "investment_error", "player": player, "action": action,
+                                                            "reason": 1}})
+                        self.state.players[player].action_points += 3
+            elif action == '4':
+                if self.state.players[player].action_points < 1:
+                    await self.send_to(player,{"type": "error",
+                                            "target": {"type": "investment_error", "player": player, "action": action,
+                                                        "reason": 1}})
+                    return False
+                if self.state.players[player].resources['矿石'] < 1:
+                    await self.send_to(player,{"type": "error", "target": {"type":"investment_error","player": player,"action": action,"reason":1}})
+                    return False
+                self.state.players[player].action_points -= 1
+                self.state.players[player].resources['矿石'] -= 1
+                award = random.choice(self.ore_choices)
+                if award == '无':
+                    await self.send_to(player,{"type": "notify", "target": {"type": "investment_success", "player": player,
+                                                                        "action": action}})
+                    return False
+                self.state.players[player].resources[award] += 1
+                self.state.current_deck.remove(award)
+                self.state.current_deck.append("矿石")
+                await self.send_to(player,{"type": "notify", "target": {"type": "investment_success", "player": player,
+                                                                    "action": action}})
+            elif isinstance(action,dict) and action.__contains__("5"):
+                if "银行" not in self.state.players[player].buildings:
+                    await self.send_to(player,{"type": "error", "target": {"type":"investment_error","player": player,"action": action,"reason":1}})
+                    return False
+                item = action['5'].split('x')[0]
+                amount = action['5'].split('x')[1]
+                if self.state.players[player].resources[item] < amount:
+                    await self.send_to(player,{"type": "error", "target": {"type":"investment_error","player": player,"action": action,"reason":1}})
+                    return False
+                value = self.state.players[player].resources[item] * \
+                    self.state.resource_values[item]
+                value *= amount
+                self.state.players[player].bank_money += value
+                self.state.players[player].resources[item] -= amount
+                await self.send_to(player,{"type": "notify", "target": {"type": "investment_success", "player": player,
+                                                                    "action": action}})
+            elif isinstance(action,dict) and action.__contains__("6"):
+                if "矿机" in self.state.players[player].buildings:
+                    if len(action['6']) >3:
+                        await self.send_to(player,{"type": "error",
+                                                "target": {"type": "investment_error", "player": player, "action": action,
+                                                            "reason": 5}})
+                        return False
+                    will_remove = []
+                    for i in action['6']:
+                        x = i
+                        if x not in self.state.market:
+                            await self.send_to(player,{"type": "error",
+                                                    "target": {"type": "investment_error", "player": player,
+                                                                "action": action, "reason": 3}})
                             continue
-                        will_remove = []
-                        for i in action['6']:
-                            x = i
-                            if x not in self.state.market:
-                                await self.broadcast({"type": "error",
-                                                      "target": {"type": "investment_error", "player": player,
-                                                                 "action": action, "reason": 3}})
-                                continue
-                            self.state.players[player].resources[x] += 1
-                            will_remove.append(x)
-                        for i in will_remove:
-                            self.state.market.remove(i)
-                        self.state.players[player].buildings.remove("矿机")
-                    elif "高级矿机" in self.state.players[player].buildings:
-                        if already_mined:
-                            continue
-                        if len(action['6']) >2:
-                            await self.broadcast({"type": "error",
-                                                  "target": {"type": "investment_error", "player": player, "action": action,
-                                                             "reason": 5}})
-                        will_remove = []
-                        for i in action['6']:
-                            x = i
-                            if x >= len(self.state.market):
-                                await self.broadcast({"type": "error",
-                                                      "target": {"type": "investment_error", "player": player,
-                                                                 "action": action, "reason": 3}})
-                            self.state.players[player].resources[self.state.market[x]] += 1
-                            will_remove.append(self.state.market[x])
-                        for i in will_remove:
-                            self.state.market.remove(i)
-                        already_mined = True
-                    else:
-                        await self.broadcast({"type": "error",
-                                              "target": {"type": "investment_error", "player": player, "action": action,
-                                                         "reason": 1}})
-                        continue
-                    await self.broadcast({"type": "notify", "target": {"type": "investment_success", "player": player,
-                                                                       "action": action}})
-                elif action == '7':
-                    if "铁镐" not in self.state.players[player].buildings:
-                        await self.broadcast({"type": "error",
-                                              "target": {"type": "investment_error", "player": player, "action": action,
-                                                         "reason": 1}})
-                        continue
-                    self.state.players[player].resources[self.state.current_deck[0]] += 1
-                    self.state.current_deck.pop(0)
-                    self.state.players[player].buildings.remove("铁镐")
-                    await self.broadcast({"type": "notify", "target": {"type": "investment_success", "player": player,
-                                                                       "action": action}})
+                        self.state.players[player].resources[x] += 1
+                        will_remove.append(x)
+                    for i in will_remove:
+                        self.state.market.remove(i)
+                    self.state.players[player].buildings.remove("矿机")
+                elif "高级矿机" in self.state.players[player].buildings:
+                    if already_mined:
+                        return False
+                    if len(action['6']) >2:
+                        await self.send_to(player,{"type": "error",
+                                                "target": {"type": "investment_error", "player": player, "action": action,
+                                                            "reason": 5}})
+                    will_remove = []
+                    for i in action['6']:
+                        x = i
+                        if x >= len(self.state.market):
+                            await self.send_to(player,{"type": "error",
+                                                    "target": {"type": "investment_error", "player": player,
+                                                                "action": action, "reason": 3}})
+                        self.state.players[player].resources[self.state.market[x]] += 1
+                        will_remove.append(self.state.market[x])
+                    for i in will_remove:
+                        self.state.market.remove(i)
+                    already_mined = True
                 else:
-                    await self.broadcast({"type": "error", "target": {"type":"investment_error","player": player,"action": action,"reason":4}})
-        return True
+                    await self.send_to(player,{"type": "error",
+                                            "target": {"type": "investment_error", "player": player, "action": action,
+                                                        "reason": 1}})
+                    return False
+                await self.send_to(player,{"type": "notify", "target": {"type": "investment_success", "player": player,
+                                                                    "action": action}})
+            elif action == '7':
+                if "铁镐" not in self.state.players[player].buildings:
+                    await self.send_to(player,{"type": "error",
+                                            "target": {"type": "investment_error", "player": player, "action": action,
+                                                        "reason": 1}})
+                    return False
+                self.state.players[player].resources[self.state.current_deck[0]] += 1
+                self.state.current_deck.pop(0)
+                self.state.players[player].buildings.remove("铁镐")
+                await self.send_to(player,{"type": "notify", "target": {"type": "investment_success", "player": player,
+                                                                    "action": action}})
+            else:
+                await self.send_to(player,{"type": "error", "target": {"type":"investment_error","player": player,"action": action,"reason":4}})
 
     async def start_game(self):
         self._game_task = asyncio.create_task(self._game_loop())
@@ -420,27 +430,35 @@ class Game:
         }
         :return:
         """
-        data = await self._collect_players_data("bidding")
-        for data in data:
+        already = defaultdict(bool)
+        while True:
+            flag = False
+            for x in self.state.players.keys():
+                if not already[x]:
+                    flag = True
+            if not flag:
+                return True
+            data = await self._collect_players_data("bidding")
             player = data['data']['player']
+            already[player] = True
             bid = data['data']['bid']
             wants = data['data']['wants']
             self.tmp = []
             if bid == 0:
-                await self.broadcast({"type": "notify", "target": {"type": "bidding_success", "player": player}})
+                await self.send_to(player,{"type": "notify", "target": {"type": "bidding_success", "player": player}})
                 return
             for x in wants:
                 if x not in self.state.market:
-                    await self.broadcast({"type": "error",
-                                          "target": {"type": "bidding_error", "player": player, "reason": 2}})
+                    await self.send_to(player,{"type": "error",
+                                        "target": {"type": "bidding_error", "player": player, "reason": 2}})
                     return
             if self.state.players[player].action_points*wants.__len__() >= 0:
-                await self.broadcast({"type": "notify", "target": {"type": "bidding_success", "player": player}})
+                await self.send_to(player,{"type": "notify", "target": {"type": "bidding_success", "player": player}})
                 self.tmp.append({"player": player, "bid": bid, "wants": wants})
                 return
             else:
-                await self.broadcast({"type": "error",
-                                      "target": {"type": "bidding_error", "player": player, "reason": 1}})
+                await self.send_to(player,{"type": "error",
+                                    "target": {"type": "bidding_error", "player": player, "reason": 1}})
                 return
 
     async def _parse_bidding(self):
@@ -454,7 +472,7 @@ class Game:
         for x in self.tmp:
             for i in x['wants']:
                 if i not in self.state.market:
-                    await self.broadcast({"type": "error",
+                    await self.send_to(x['player'],{"type": "error",
                                           "target": {"type": "bidding_error", "player": x['player'], "reason": 1}})
                     continue
                 self.state.tmp_cnt_take[i] += 1
@@ -504,6 +522,7 @@ class Game:
                     continue
                 for item,amount in can_pay[0]['resources'].items():
                     self.state.players[player].resources[item] -= amount
+            await self.state.players[player].ws.send_json({"type": "notify", "target": {"type": "died_players", "players": died_player}})
             for x in died_player:
                 del self.state.players[x]
                 await self.state.players[x].ws.close()
@@ -514,6 +533,7 @@ class Game:
                     died_player.append(player)
                     continue
                 data.resources['食物'] -= 3
+            await self.broadcast({"type": "notify", "target": {"type": "died_players", "players": died_player}})
             for x in died_player:
                 del self.state.players[x]
                 await self.state.players[x].ws.close()

@@ -4,7 +4,6 @@ import time
 
 import IPython
 from tabulate import tabulate
-import sys
 import linecache
 def input_(prompt:str='')->str:
     res = input(prompt)
@@ -307,17 +306,17 @@ class ResourceIsland:
         self.o.b(f"当前是第 {epoch} 轮的特殊阶段事件卡。")
         event_deck = self.event_deck
         if epoch in self.event_immunitie:
-            self.o.b(f"当前海岛掠夺、天降饥荒可豁免")
-            self.o.w(f">> 删除海盗掠夺、天降饥荒")
+            self.o.b("当前海岛掠夺、天降饥荒可豁免")
+            self.o.w(">> 删除海盗掠夺、天降饥荒")
             while "海盗掠夺" in event_deck:
                 self.event_deck.remove("海盗掠夺")
             while "天降饥荒" in event_deck:
                 self.event_deck.remove("天降饥荒")
-        self.o.w(f">> 正在挑选事件卡")
+        self.o.w(">> 正在挑选事件卡")
         event = random.choice(event_deck)
         self.o.b(f"本轮事件：{event}")
         if event == "火山爆发":
-            self.o.w(f">> 移除市场上一半资源")
+            self.o.w(">> 移除市场上一半资源")
             self.market = self.market[:len(self.market)//2]
         if event == "海盗掠夺":
             calc = ResourceIsland.ResourceValueCalculator(self.resource_values)
@@ -369,7 +368,7 @@ class ResourceIsland:
             # bids.sort(key=lambda x:x['bid'],reverse=True)
 
         if event == "祝福事件":
-            self.o.w(f">> 所有玩家行动点+2")
+            self.o.w(">> 所有玩家行动点+2")
             for player,data in self.players.items():
                 data['action_points'] += 2
         self.o.b("事件回合结束")
@@ -399,7 +398,7 @@ class ResourceIsland:
         clear()
         self.display_game_state()
         self.o.b(f"现在是第 {epoch} 轮的竞标阶段")
-        self.o.w(f">> 竞标开始")
+        self.o.w(">> 竞标开始")
         bids = []
         for player,data in self.players.items():
             if data['action_points'] == 0:
@@ -415,7 +414,7 @@ class ResourceIsland:
                     self.o.w(f"玩家 {player} 放弃竞标")
                     continue
             bids.append({"player":player, "bid":bid} )
-        self.o.w(f">> 价格统计完毕，排序中")
+        self.o.w(">> 价格统计完毕，排序中")
         bids.sort(key=lambda x:x['bid'],reverse=True)
         for x in bids:
             self.o.w(f">> 计算出玩家 {x['player']} 现在开始拿取")
@@ -430,7 +429,7 @@ class ResourceIsland:
                 if self.players[x['player']]['action_points'] < x['bid']:
                     break
                 self.o.b(f"玩家 {x['player']} 你还可以拿取 {can-n*x['bid']} 个物品")
-                self.o.w(f">> 请选择你要拿取的物品下标或者输入ok推出")
+                self.o.w(">> 请选择你要拿取的物品下标或者输入ok推出")
                 take = input_()
                 if take == 'ok':
                     break
@@ -441,7 +440,7 @@ class ResourceIsland:
                 self.market.pop(take)
                 clear()
                 self.display_game_state()
-        self.o.b(f"竞标阶段结束")
+        self.o.b("竞标阶段结束")
 
     def _handle_investment(self, epoch:int):
         """处理投资阶段"""
@@ -451,7 +450,7 @@ class ResourceIsland:
         already_exchanged = []
         already_mined = []
         if not self.market:
-            self.o.y(f"当前市场上没有物品，正在强制补充")
+            self.o.y("当前市场上没有物品，正在强制补充")
             for k in self.players.keys():
                 if self.players[k]['action_points']:
                     self.players[k]['action_points'] -= 1
@@ -460,7 +459,7 @@ class ResourceIsland:
                 self._handle_investment(epoch)
             return
         if len(set(self.market)) == 1 and self.market:
-            self.o.y(f"市场上只剩下1种资源，正在放入资源堆")
+            self.o.y("市场上只剩下1种资源，正在放入资源堆")
             self.current_deck.extend(self.market)
             self.market = []
             self._handle_investment(epoch)
@@ -480,16 +479,16 @@ class ResourceIsland:
                     self.players[player]['resources']['木材'] +=1
                     self.market.remove("木材")
                 else:
-                    self.o.y(f"市场上没有木材，增加失败")
+                    self.o.y("市场上没有木材，增加失败")
             if "高级伐木场" in self.players[player]['buildings']:
                 self.o.w(f">> 玩家 {player} 有高级伐木场，增加2木材")
                 if self.current_deck.count("木材") <2:
-                    self.o.y(f"市场上没有木材，增加失败")
+                    self.o.y("市场上没有木材，增加失败")
                     self.players[player]['resources']['木材'] +=2
                     self.current_deck.remove("木材")
                     self.current_deck.remove("木材")
                 else:
-                    self.o.y(f"市场上没有木材，增加失败")
+                    self.o.y("市场上没有木材，增加失败")
         time.sleep(3)
         for player,data in self.players.items():
             while True:
@@ -504,7 +503,7 @@ class ResourceIsland:
                                     ['8', '结束回合',0]
                                   ],headers=["编号","操作","消耗"])
                 print(table)
-                self.o.b(f">> 请输入投资类型：")
+                self.o.b(">> 请输入投资类型：")
                 action = input_()
                 if action == '1':
                     self.o.w(f">> 玩家 {player} 探索市场")
@@ -519,19 +518,19 @@ class ResourceIsland:
                         self.o.y(f"玩家 {player} 食物不足，兑换失败")
                         continue
                     if player in already_exchanged:
-                        self.o.y(f"你已经兑换过了")
+                        self.o.y("你已经兑换过了")
                     self.players[player]['resources']['食物'] -= 1
                     self.players[player]['action_points'] += 2
                     self.current_deck.append('食物')
                 elif action == '3':
                     self.o.w(f">> 玩家 {player} 建造建筑")
                     if self.players[player]['action_points'] < 3:
-                        self.o.y(f"你没行动点，建造失败")
+                        self.o.y("你没行动点，建造失败")
                         continue
                     self.players[player]['action_points'] -= 3
                     building = input_("你要建造什么建筑：")
                     if building not in self.all_buildings:
-                        self.o.y(f"建筑不存在")
+                        self.o.y("建筑不存在")
                         continue
                     else :
                         if not self._process_build(player,building):
@@ -560,7 +559,7 @@ class ResourceIsland:
                     item = input_("你要存什么物品：")
                     amount = int(input_("存几个："))
                     if item not in self.all_resources:
-                        self.o.y(f"物品不存在")
+                        self.o.y("物品不存在")
                         continue
                     if self.players[player]['resources'][item] < amount:
                         self.o.y("背包里这个物品不够")
@@ -577,7 +576,7 @@ class ResourceIsland:
                             ores.append(i)
                     if "矿机" in self.players[player]['buildings']:
                         for i in range(3):
-                            self.o.b(f"当前市场上有以下矿物：" + str(ores))
+                            self.o.b("当前市场上有以下矿物：" + str(ores))
                             x = int(input_("你要拿哪个："))
                             if x >= len(ores):
                                 self.o.y(f"市场没有索引为 {i} 的物品")
@@ -591,10 +590,10 @@ class ResourceIsland:
                             continue
                         already_mined.append(player)
                         for i in range(2):
-                            self.o.b(f"当前市场上有以下矿物：" + str(ores))
+                            self.o.b("当前市场上有以下矿物：" + str(ores))
                             x = int(input_("你要拿哪个："))
                             if not ores:
-                                self.o.b(f"市场上没有多余矿物，跳过")
+                                self.o.b("市场上没有多余矿物，跳过")
                                 continue
                             if x >= len(ores):
                                 self.o.y(f"市场没有索引为 {x} 的物品")
@@ -606,13 +605,13 @@ class ResourceIsland:
                         continue
                 elif action == '7':
                     if "铁镐" not in self.players[player]['buildings']:
-                        self.o.y(f"你没有铁镐采什么啊")
+                        self.o.y("你没有铁镐采什么啊")
                         continue
                     self.players[player]['resources'][self.current_deck[0]] += 1
                     self.current_deck.pop(0)
                     self.players[player]['buildings'].remove("铁镐")
                 elif action == '114514':
-                    self.o.r(f"开始调试")
+                    self.o.r("开始调试")
                     from IPython import embed
                     embed()
                 clear()
