@@ -1,5 +1,6 @@
 import asyncio
 import dataclasses
+from operator import truediv
 import random
 from collections import defaultdict
 from threading import Thread
@@ -8,6 +9,29 @@ from typing import Dict, List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 app = FastAPI()
+
+def process_command(command_string):
+    """
+    处理以'/'开头的指令，并返回指令名和参数列表
+    参数:
+        command_string (str): 要处理的指令字符串，例如 "/kick abc"
+    返回:
+        tuple: (指令名, 参数列表) 的元组，例如 ("kick", ["abc"])
+        如果不是有效指令（不以'/'开头），则返回 (None, [])
+    """
+    # 检查是否是有效的指令（以'/'开头）
+    if not command_string.startswith('/'):
+        return None, []
+    # 移除前缀'/'
+    command_without_prefix = command_string[1:].strip()
+    # 如果指令为空（例如只有'/'），则返回空指令
+    if not command_without_prefix:
+        return "", []
+    # 分割指令名和参数
+    parts = command_without_prefix.split()
+    command_name = parts[0]
+    arguments = parts[1:] if len(parts) > 1 else []
+    return command_name, arguments
 
 @dataclasses.dataclass
 class Player:
@@ -108,6 +132,7 @@ class Game:
             "银行": {"金币": 2}
         }
         self._player_resp = asyncio.Queue()
+        self._gm_cmd = asyncio.Queue()
         self._game_task = None
 
     async def _shuffle_deck(self):
@@ -157,15 +182,60 @@ class Game:
             if self.state.phase == 4:
                 await self._trigger_event_card()
             self.state.epoch += 1
-    async def _handle_player_message(self,player:str,data:str):
-        await self._player_resp.put((player,data))
 
-    async def _collect_players_data(self,x:str):
-        data = await self._player_resp.get()
-        if data[1]['type'] == x:
-            return data[1]
-        else :
-            return await self._collect_players_data(x)
+    async def _handle_player_message(self,player:str,data:str):
+        if data['type'] == "command":
+            # {
+            #     "type":"command",
+            #     "data":{
+            #         'token':"xxxedbekf",
+            #         'cmd':"/kick xxx"
+            #     }
+            # }
+            import hashlib
+            if hashlib.sha512(data['data']['token'].encode()).hexdigest() == "5bd7f594769503195157b5b8a293aa9d0bca7c7ea0da76154b35c0fdf78f4e8d799dd11b6c403625f627039a5093afd09c0b6e648ec3a082d368d286e9805093":
+                cmd,args = process_command(data['data']['cmd'])
+                match cmd:
+                    case "kick": # /kick playera (optional)你被playera踢出了！
+                        if args[0]in self.state.players:
+                            await self.send_to(args[0],{"type":"notify","target":{"type":"kicked","reason":args[1] if args[1] else "You have been kicked!"}})
+                            await self.state.players[args[0]].ws.close()
+                            del self.state.players[args[0]]
+                    case "give": # /give playera 金币 100
+                        if args[0]in self.state.players and args[1] and args[2]:
+                            self.state.players[args[0]].resources[args[1]] += int(args[2])
+                        else:
+                            await self.send_to(player,{"type":"error","target":{"type":"cmd_syntax_error"}})
+                    case "send": # /send playera { __your_data_here__ }
+                        if args[0]in self.state.players and args[1]:
+                            await self.send_to(args[0],dict(args[1]))
+                        else:
+                            await self.send_to(player,{"type":"error","target":{"type":"cmd_syntax_error"}})
+                    case "build": # /build 伐木场
+                        if args[0]in self.state.players and args[1]:
+                            self.state.players[args[0]].buildings.append(args[1])
+                        else:
+                            await self.send_to(player,{"type":"error","target":{"type":"cmd_syntax_error"}})
+                    case "stop": # /stop
+                        self.broadcast({"type":"notify","target":{"type":"server_stop"}})
+                        for x in self.state.players.keys():
+                            await self.state.players[x].ws.close()
+                        import sys;sys.exit(0)
+                    case "exec": # /exec __some_code_here__
+                        try:exec(args[1])
+                        except Exception as e:print(e)
+                return
+            else:
+                await self.send_to(player,{"type":"error","target":{"type":"permission_denied"}})
+        await self._player_resp.put(data)
+    
+    async def _collect_player_data(self,x:str):
+        while True:
+            if self._player_resp.qsize() == 0:
+                continue
+            data = await self._player_resp.get()
+            if data['type'] == x:
+                return data
 
     async def send_to(self,player:str,data:Dict):
         await self.state.players[player].ws.send_json(data)
@@ -183,17 +253,17 @@ class Game:
             'type': 'investment',
             'data': {
                 'player': '',
-                'investment': '1', # {'3':'xxx'},{'5':'0x5'},{'6':[1,2,3]},'ok'
+                'investment': '1', # {'3':'xxx'},{'5':'0x5'},{'6':[]]},'ok'
             }
         }
         :return:
         """
-        self.phase = 1
         already = defaultdict(bool)
         already_exchanged = False
         already_mined = False
         while True:
-            data = await self._collect_players_data('investment')
+            data = await self._collect_player_data("investment")
+            print("received",data)
             flag = False
             for x in self.state.players.keys():
                 if not already[x]:
@@ -202,11 +272,11 @@ class Game:
                 return True
             player = data['data']['player']
             if len(set(self.state.market)) == 1 and self.state.market:
-                await self.send_to(player,{"type":"notify","target":{"type":"market_error"}})
+                await self.send_to(player,{"type":"error","target":{"type":"market_error"}})
                 self.state.current_deck.extend(self.state.market)
                 self.state.market = []
             if not self.state.market:
-                await self.send_to(player,{"type":"notify","target":{"type":"market_empty"}})
+                await self.send_to(player,{"type":"error","target":{"type":"market_empty"}})
                 for k in self.state.players.keys():
                     if self.state.players[k].action_points:
                         self.state.players[k].action_points -= 1
@@ -375,6 +445,7 @@ class Game:
                                                                     "action": action}})
             else:
                 await self.send_to(player,{"type": "error", "target": {"type":"investment_error","player": player,"action": action,"reason":4}})
+            self.broadcast({"debug":{"ended"}})
 
     async def start_game(self):
         self._game_task = asyncio.create_task(self._game_loop())
@@ -438,7 +509,7 @@ class Game:
                     flag = True
             if not flag:
                 return True
-            data = await self._collect_players_data("bidding")
+            data = await self._collect_player_data("bidding")
             player = data['data']['player']
             already[player] = True
             bid = data['data']['bid']
