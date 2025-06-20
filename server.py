@@ -134,6 +134,7 @@ class Game:
         self._player_resp = asyncio.Queue()
         self._gm_cmd = asyncio.Queue()
         self._game_task = None
+        self._server_resp = asyncio.Queue()
 
     async def _shuffle_deck(self):
         self.state.current_deck = []
@@ -169,6 +170,7 @@ class Game:
                 await self._handle_investment()
                 self.state.phase = 2
             if self.state.phase == 2:
+                print("sent")
                 await self.broadcast({"type": "notify", "target": {"type": "phase_changed", "epoch": self.state.epoch,
                                                                    "phase": self.state.phase}})
                 await self.broadcast({"type": "notify", "target": {"type": "data_required", "epoch": self.state.epoch,
@@ -228,7 +230,17 @@ class Game:
             else:
                 await self.send_to(player,{"type":"error","target":{"type":"permission_denied"}})
         await self._player_resp.put(data)
-    
+
+    async def get_server_resp(self,cur_player:str,cur_phase:str):
+        while True:
+            if self._player_resp.qsize() == 0:
+                continue
+            data = await self._server_resp.get()
+            if data['type'] == cur_phase and data['player'] == cur_player:
+                return data['data']
+            else:
+                await self._server_resp.put(data)
+
     async def _collect_player_data(self,x:str):
         while True:
             if self._player_resp.qsize() == 0:
@@ -238,7 +250,19 @@ class Game:
                 return data
 
     async def send_to(self,player:str,data:Dict):
+        # The use of WebSocket protocol for transmission has been abandoned
         await self.state.players[player].ws.send_json(data)
+        x = None
+        match self.state.phase:
+            case 1:
+                x = "investment"
+            case 2:
+                x = "bidding"
+            case 3:
+                x = "value_update"
+            case 4:
+                x = "event_card"
+        await self._server_resp.put({'player':player,'type':x,'data':data})
 
     async def _handle_investment(self):
         """
@@ -258,18 +282,11 @@ class Game:
         }
         :return:
         """
-        already = defaultdict(bool)
+        already = list()
         already_exchanged = False
         already_mined = False
         while True:
             data = await self._collect_player_data("investment")
-            print("received",data)
-            flag = False
-            for x in self.state.players.keys():
-                if not already[x]:
-                    flag=True
-            if not flag:
-                return True
             player = data['data']['player']
             if len(set(self.state.market)) == 1 and self.state.market:
                 await self.send_to(player,{"type":"error","target":{"type":"market_error"}})
@@ -311,8 +328,8 @@ class Game:
             #             ],headers=["编号","操作","消耗"]
             action = data['data']['investment']
             if action == 'ok':
-                already[player] = True
-                continue
+                await self.send_to(player,{"type":"notify", "target":{"type":"investment_success","player":player,"action":action}})
+                already.append(player)
             elif action == '1':
                 if self.state.players[player].action_points <1:
                     await self.send_to(player,{"type": "error", "target": {"type":"investment_error","player": player,"action": action,"reason":1}})
@@ -344,7 +361,7 @@ class Game:
                     await self.send_to(player,{"type": "error", "target": {"type":"investment_error","player": player,"action": action,"reason":2}})
                     return False
                 else :
-                    if not self._process_build(player,building):
+                    if not await self._process_build(player,building):
                         await self.send_to(player,{"type": "error",
                                                 "target": {"type": "investment_error", "player": player, "action": action,
                                                             "reason": 1}})
@@ -445,7 +462,13 @@ class Game:
                                                                     "action": action}})
             else:
                 await self.send_to(player,{"type": "error", "target": {"type":"investment_error","player": player,"action": action,"reason":4}})
-            self.broadcast({"debug":{"ended"}})
+            flag = False
+            print(already)
+            for x in self.state.players.keys():
+                if x not in already:
+                    flag=True
+            if flag == False:
+                return True
 
     async def start_game(self):
         self._game_task = asyncio.create_task(self._game_loop())
@@ -479,7 +502,7 @@ class Game:
             self.state.current_deck.append(k)
 
     async def _process_build(self,player_name:str, building:str):
-        m , x=self._check_can_build(player_name,building)
+        m , x=await self._check_can_build(player_name,building)
         if m:
             await self._pay_to_build(player_name,x)
             self.state.players[player_name].buildings.append(building)
@@ -660,6 +683,7 @@ async def _(ws: WebSocket, player: str):
     await game.broadcast({"type": "notify", "target": {"type": "player_join", "player": player}})
     try:
         while True:
+            # The use of WebSocket protocol for transmission has been abandoned
             data = await ws.receive_json()
             await game._handle_player_message(player, data)
     except WebSocketDisconnect:
@@ -674,6 +698,23 @@ async def game_starter():
         return True
     await asyncio.wait_for(a(),timeout=300)
     await game.start_game()
+
+@app.post("/submit/investment/{player}/")
+async def _(player:str,data:dict):
+    if game.state.phase !=1:
+        return {}
+    await game._handle_player_message(player,data)
+    resp = await game.get_server_resp(player,cur_phase="investment")
+    return resp
+
+@app.post("/submit/bidding/{player}")
+async def _(player:str,data:dict):
+    if game.state.phase !=2:
+        return {}
+    await game._handle_player_message(player,data)
+    resp = await game.get_server_resp(player,cur_phase="bidding")
+    return resp
+
 if __name__ == "__main__":
     Thread(target=lambda: asyncio.run(game_starter()),name="game_starter",daemon=True).start()
     import uvicorn

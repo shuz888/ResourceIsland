@@ -1,7 +1,7 @@
+from ast import Return
 import os
 from re import T
 import sys
-import time
 import asyncio
 from threading import Thread
 
@@ -23,7 +23,7 @@ async def input_(prompt:str='')->str:
         return await input_(prompt)
     if res.startswith('/'):
         token = input("token:")
-        game.send({"type":"command","target":{"token":token,"cmd":res}})
+        await game.send({"type":"command","data":{"token":token,"cmd":res}})
     return res
 
 class Tracer:
@@ -197,6 +197,8 @@ class ResourceIsland:
         self.wsurl = f"ws://{server_addr}/ws/{player_name}"
         self.gmsturl = f"http://{server_addr}/game/state"
         self.plsturl = f"http://{server_addr}/playerinfo/{player_name}"
+        self.sbmtinvurl = f"http://{server_addr}/submit/investment/{player_name}"
+        self.sbmtbidurl = f"http://{server_addr}/submit/investment/{player_name}"
         self.server_addr = server_addr
         self.o = ColorOutput()
         self.player_name = player_name
@@ -274,14 +276,16 @@ class ResourceIsland:
         self.market = game_state['market']
         self.started = game_state['started']
 
-    async def send(self, message):
+    async def send(self, message, is_inv:bool):
         """发送消息到服务器"""
         if not self.websocket:
             self.o.r("未连接到服务器")
             return False
         try:
-            await self.websocket.send(json.dumps(message))
-            return True
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.sbmtinvurl if is_inv else self.sbmtbidurl,json=message) as resp:
+                    return await resp.json()
         except Exception as e:
             self.o.r(f"发送消息失败: {e}")
             return False
@@ -293,6 +297,8 @@ class ResourceIsland:
             return None
         try:
             message = await self.websocket.recv()
+            print(f"received {message}")
+            await asyncio.sleep(0.5)
             return json.loads(message)
         except Exception as e:
             self.o.r(f"接收消息失败: {e}")
@@ -319,7 +325,7 @@ class ResourceIsland:
                 'player': self.player_name,
                 'investment':inv
             }
-        })
+        },is_inv=True)
     
     async def initialize_game(self):
         await clear()
@@ -481,7 +487,7 @@ class ResourceIsland:
                 else :self.o.y("不存在")
                 if want == 'ok':
                     break
-        await self.send({"type":"bidding","data":bids})
+        resp = await self.send({"type":"bidding","data":bids},is_inv=False)
         self.o.w(">> 您的价格已上交")
         await clear()
         await self.display_game_state()
@@ -535,18 +541,19 @@ class ResourceIsland:
                 print(table)
                 self.o.b(">> 请输入投资类型：")
                 action = await input_()
+                resp = None
                 if action == '1':
                     self.o.w(f">> 玩家 {player} 探索市场")
                     if self.players[player]['action_points'] <1:
                         self.o.y(f"玩家 {player} 没有足够的行动点数")
                         continue
-                    await self.send_investment("1")
+                    resp = await self.send_investment("1")
                 elif action == '2':
                     self.o.w(f">> 玩家 {player} 使用1食物兑换行动点*2")
                     if self.players[player]['resources']['食物'] < 1:
                         self.o.y(f"玩家 {player} 食物不足，兑换失败")
                         continue
-                    await self.send_investment("2")
+                    resp = await self.send_investment("2")
                 elif action == '3':
                     self.o.w(f">> 玩家 {player} 建造建筑")
                     if self.players[player]['action_points'] < 3:
@@ -559,13 +566,13 @@ class ResourceIsland:
                         continue
                     else :
                         if await self._check_can_build(player,building):
-                            await self.send_investment({"3":building})
+                            resp = await self.send_investment({"3":building})
                         else:
                             self.o.y(f"你好像不能建造：")
                             if input("执意建造？") == "force":
-                                await self.send_investment({"3":building})
+                                resp = await self.send_investment({"3":building})
                 elif action == '8':
-                    await self.send_investment('ok')
+                    resp = await self.send_investment('ok')
                     break
                 elif action == '4':
                     if self.players[player]['action_points'] < 1:
@@ -576,7 +583,7 @@ class ResourceIsland:
                         continue
                     self.players[player]['action_points'] -= 1
                     self.players[player]['resources']['矿石'] -= 1
-                    await self.send_investment('4')
+                    resp = await self.send_investment('4')
                 elif action == '5':
                     if "银行" not in self.players[player]['buildings']:
                         self.o.y("你没有银行存个蛋")
@@ -589,7 +596,7 @@ class ResourceIsland:
                     if self.players[player]['resources'][item] < amount:
                         self.o.y("背包里这个物品不够")
                         continue
-                    await self.send_investment({"5":f"{item}x{amount}"})
+                    resp = await self.send_investment({"5":f"{item}x{amount}"})
                 elif action == '6':
                     ores = []
                     if "矿机" in self.players[player]['buildings']:
@@ -603,7 +610,7 @@ class ResourceIsland:
                             if x >= len(ores):
                                 self.o.y(f"市场没有索引为 {i} 的物品")
                             wants.append(x)
-                        await self.send_investment({"6":wants})
+                        resp = await self.send_investment({"6":wants})
                         self.players[player]['buildings'].remove("矿机")
                     elif "高级矿机" in self.players[player]['buildings']:
                         if player in already_mined:
@@ -619,7 +626,7 @@ class ResourceIsland:
                             if x >= len(ores):
                                 self.o.y(f"市场没有索引为 {x} 的物品")
                             wants.append(x)
-                        await self.send_investment({"6":wants})
+                        resp = await self.send_investment({"6":wants})
                     else:
                         self.o.y("你没有矿机挖个蛋")
                         continue
@@ -627,8 +634,29 @@ class ResourceIsland:
                     if "铁镐" not in self.players[player]['buildings']:
                         self.o.y("你没有铁镐采什么啊")
                         continue
-                    await self.send_investment('7')
+                    resp = await self.send_investment('7')
+                if resp == None:
+                    return
+                if resp['type'] == 'notify':
+                    target = resp['target']
+                    if target['type'] == 'investment_success':
+                        self.o.g(f"投资 {target['action']} 成功")
+                elif resp['type'] == 'error':
+                    target = resp['target']
+                    match target['reason']:
+                        case 1:
+                            self.o.y(f"投资 {target['action']} 失败：没有足够行动点或者耗材")
+                        case 2:
+                            self.o.y(f"投资 {target['action']} 失败：物品/建筑不在范围内")
+                        case 3:
+                            self.o.y(f"投资 {target['action']} 失败：下标错误")
+                        case 4:
+                            self.o.y(f"投资 {target['action']} 失败：行动不存在")
+                        case 5:
+                            self.o.y(f"投资 {target['action']} 失败：采集数量超限")
+                await asyncio.sleep(0.5)
                 await clear()
+                await self.sync_game_state()
                 await self.display_game_state()
             self.o.w(f">> 玩家 {player} 投资结束")
             await clear()
