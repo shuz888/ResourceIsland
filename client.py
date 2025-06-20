@@ -198,7 +198,7 @@ class ResourceIsland:
         self.gmsturl = f"http://{server_addr}/game/state"
         self.plsturl = f"http://{server_addr}/playerinfo/{player_name}"
         self.sbmtinvurl = f"http://{server_addr}/submit/investment/{player_name}"
-        self.sbmtbidurl = f"http://{server_addr}/submit/investment/{player_name}"
+        self.sbmtbidurl = f"http://{server_addr}/submit/bidding/{player_name}"
         self.server_addr = server_addr
         self.o = ColorOutput()
         self.player_name = player_name
