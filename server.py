@@ -1,5 +1,6 @@
 import asyncio
 import dataclasses
+from email.policy import default
 from operator import truediv
 import random
 from collections import defaultdict
@@ -92,7 +93,7 @@ class GameState:
             '钻石': 8, '金币': 6, '木材': 2,
             '矿石': 3, '食物': 1, '铁': 2
         }
-        self.tmp_cnt_take = {}
+        self.tmp_cnt_take = defaultdict(int)
         self.started = False
 class Game:
     def __init__(self):
@@ -163,6 +164,7 @@ class Game:
             self.state.players[player].resources['食物'] += 5
         await self.broadcast({"type":"notify","target":{"type":"game_start"}})
         while self.state.epoch <= 30:
+            self.state.phase = 1
             if self.state.phase == 1:
                 await self.broadcast({"type": "notify", "target": {"type": "phase_changed","epoch":self.state.epoch,"phase":self.state.phase}})
                 await self.broadcast({"type": "notify", "target": {"type": "data_required", "epoch": self.state.epoch,
@@ -170,18 +172,24 @@ class Game:
                 await self._handle_investment()
                 self.state.phase = 2
             if self.state.phase == 2:
-                print("sent")
                 await self.broadcast({"type": "notify", "target": {"type": "phase_changed", "epoch": self.state.epoch,
                                                                    "phase": self.state.phase}})
                 await self.broadcast({"type": "notify", "target": {"type": "data_required", "epoch": self.state.epoch,
                                                                    "phase": self.state.phase}})
                 await self._handle_bidding()
+                self.state.phase = -2
+                await self.broadcast({"type": "notify", "target": {"type": "phase_changed", "epoch": self.state.epoch,
+                                                                   "phase": self.state.phase}})
                 await self._parse_bidding()
                 self.state.phase = 3
             if self.state.phase == 3:
+                await self.broadcast({"type": "notify", "target": {"type": "phase_changed", "epoch": self.state.epoch,
+                                                                   "phase": self.state.phase}})
                 await self._update_resource_values()
                 self.state.phase = 4
             if self.state.phase == 4:
+                await self.broadcast({"type": "notify", "target": {"type": "phase_changed", "epoch": self.state.epoch,
+                                                                   "phase": self.state.phase}})
                 await self._trigger_event_card()
             self.state.epoch += 1
 
@@ -241,11 +249,13 @@ class Game:
             else:
                 await self._server_resp.put(data)
 
-    async def _collect_player_data(self,x:str):
+    async def _collect_player_data(self,x:str,cur_player:str=None):
         while True:
             if self._player_resp.qsize() == 0:
                 continue
             data = await self._player_resp.get()
+            if cur_player != None and data['data']['player'] != cur_player:
+                continue
             if data['type'] == x:
                 return data
 
@@ -262,6 +272,8 @@ class Game:
                 x = "value_update"
             case 4:
                 x = "event_card"
+            case -2:
+                x = "bidding_wants"
         await self._server_resp.put({'player':player,'type':x,'data':data})
 
     async def _handle_investment(self):
@@ -289,11 +301,11 @@ class Game:
             data = await self._collect_player_data("investment")
             player = data['data']['player']
             if len(set(self.state.market)) == 1 and self.state.market:
-                await self.send_to(player,{"type":"error","target":{"type":"market_error"}})
+                await self.broadcast({"type":"error","target":{"type":"market_error"}})
                 self.state.current_deck.extend(self.state.market)
                 self.state.market = []
             if not self.state.market:
-                await self.send_to(player,{"type":"error","target":{"type":"market_empty"}})
+                await self.broadcast({"type":"error","target":{"type":"market_empty"}})
                 for k in self.state.players.keys():
                     if self.state.players[k].action_points:
                         self.state.players[k].action_points -= 1
@@ -366,6 +378,7 @@ class Game:
                                                 "target": {"type": "investment_error", "player": player, "action": action,
                                                             "reason": 1}})
                         self.state.players[player].action_points += 3
+                        return False
             elif action == '4':
                 if self.state.players[player].action_points < 1:
                     await self.send_to(player,{"type": "error",
@@ -463,7 +476,6 @@ class Game:
             else:
                 await self.send_to(player,{"type": "error", "target": {"type":"investment_error","player": player,"action": action,"reason":4}})
             flag = False
-            print(already)
             for x in self.state.players.keys():
                 if x not in already:
                     flag=True
@@ -472,6 +484,7 @@ class Game:
 
     async def start_game(self):
         self._game_task = asyncio.create_task(self._game_loop())
+        
     async def _check_can_build(self, player_name:str, building:str):
         calc = ResourceValueCalculator(self.state.resource_values)
         cost = 0
@@ -511,8 +524,6 @@ class Game:
     async def _handle_bidding(self):
         """
         error:
-        1=出价无法支付
-        2=物品没有在市场中
         :param data:
         {
             'type': 'bidding',
@@ -524,60 +535,75 @@ class Game:
         }
         :return:
         """
-        already = defaultdict(bool)
+        already = list()
+        self.tmp = []
         while True:
+            data = await self._collect_player_data("bidding")
+            player = data['data']['player']
+            bid = data['data']['bid']
+            if bid == 0:
+                await self.send_to(player,{"type": "notify", "target": {"type": "bidding_success", "player": player}})
+                already.append(player)
+                flag = False
+                for x in self.state.players.keys():
+                    if x not in already:
+                        flag = True
+                if not flag:
+                    return True
+                continue
+            self.tmp.append({"player":player,"bid":bid})
+            already.append(player)
+            await self.send_to(player,{"type": "notify", "target": {"type": "bidding_success", "player": player}})
             flag = False
             for x in self.state.players.keys():
-                if not already[x]:
+                if x not in already:
                     flag = True
             if not flag:
                 return True
-            data = await self._collect_player_data("bidding")
-            player = data['data']['player']
-            already[player] = True
-            bid = data['data']['bid']
-            wants = data['data']['wants']
-            self.tmp = []
-            if bid == 0:
-                await self.send_to(player,{"type": "notify", "target": {"type": "bidding_success", "player": player}})
-                return
-            for x in wants:
-                if x not in self.state.market:
-                    await self.send_to(player,{"type": "error",
-                                        "target": {"type": "bidding_error", "player": player, "reason": 2}})
-                    return
-            if self.state.players[player].action_points*wants.__len__() >= 0:
-                await self.send_to(player,{"type": "notify", "target": {"type": "bidding_success", "player": player}})
-                self.tmp.append({"player": player, "bid": bid, "wants": wants})
-                return
-            else:
-                await self.send_to(player,{"type": "error",
-                                    "target": {"type": "bidding_error", "player": player, "reason": 1}})
-                return
 
     async def _parse_bidding(self):
         """
         error:
         1=物品被他人拿取
+        2=行动点不足
+        {
+            'type':'bidding_wants',
+            'data':{
+                'player': 'xxx',
+                'want': 1
+            }
+        }
         :return:
         """
         self.tmp.sort(key=lambda y: y['bid'], reverse=True)
         await self.broadcast({"type": "notify", "target": {"type": "bidding_sorted", "sorted": [bid['player'] for bid in self.tmp]}})
         for x in self.tmp:
-            for i in x['wants']:
-                if i not in self.state.market:
+            if x['bid'] == 0:
+                continue
+            await self.state.players[x['player']].ws.send_json({"type":"notify","target":{"type":"data_required","epoch":self.state.epoch,"phase":-2}})
+            while True:
+                dt = await self._collect_player_data("bidding_wants",cur_player=x['player'])
+                if dt['data']['want'] == 'ok':
+                    await self.send_to(x['player'],{"type": "notify",
+                                          "target": {"type": "bidding_success", "player": x['player']}})
+                    break
+                if dt['data']['want'] >= len(self.state.market):
                     await self.send_to(x['player'],{"type": "error",
                                           "target": {"type": "bidding_error", "player": x['player'], "reason": 1}})
                     continue
-                self.state.tmp_cnt_take[i] += 1
+                if self.state.players[x['player']].action_points < x['bid']:
+                    await self.send_to(x['player'],{"type": "error",
+                                          "target": {"type": "bidding_error", "player": x['player'], "reason": 2}})
+                    break
+                self.state.tmp_cnt_take[self.state.market[dt['data']['want']]] += 1
                 self.state.players[x['player']].action_points -= x['bid']
-                self.state.players[x['player']].resources[i] += 1
-                self.state.market.remove(i)
+                self.state.players[x['player']].resources[self.state.market[dt['data']['want']]] += 1
+                self.state.market.pop(dt['data']['want'])
+                await self.send_to(x['player'],{"type": "notify",
+                                          "target": {"type": "bidding_success", "player": x['player']}})
     async def _update_resource_values(self):
         if self.state.epoch % 3 != 0:
             return
-        await game.broadcast({"type": "notify", "target": {"type": "phase_changed", "epoch": self.state.epoch,
-                                                           "phase": self.state.phase}})
         for k in self.state.resource_values.keys():
             if self.state.tmp_cnt_take[k] == 0:
                 self.state.resource_values[k]+=1
@@ -589,20 +615,19 @@ class Game:
                 self.state.resource_values[k] -= 1
                 await game.broadcast({"type": "notify", "target": {"type": "value_changed", "resource":k, "value": self.state.resource_values[k]}})
     async def _trigger_event_card(self):
+        print(self.state.epoch)
         if self.state.epoch not in [3,6,9,13,15,18,21,23,25,27]:
             return
-        await game.broadcast({"type": "notify", "target": {"type": "phase_changed", "epoch": self.state.epoch,
-                                                           "phase": self.state.phase}})
         event_deck = self.event_deck
         if self.state.epoch in self.state.event_immunitie:
             while "海盗掠夺" in event_deck:
-                self.event_deck.remove("海盗掠夺")
+                event_deck.remove("海盗掠夺")
             while "天降饥荒" in event_deck:
-                self.event_deck.remove("天降饥荒")
+                event_deck.remove("天降饥荒")
         event = random.choice(event_deck)
-        await game.broadcast({"type": "notify", "target": {"type": "event_choiced", "event":event}})
+        await game.broadcast({"type": "notify", "target": {"type": "event_choiced", "epoch":self.state.epoch,"event":event}})
         if event == "火山爆发":
-            self.market = self.state.market[:len(self.state.market)//2]
+            self.state.market = self.state.market[:len(self.state.market)//2]
         if event == "海盗掠夺":
             calc = ResourceValueCalculator(self.state.resource_values)
             died_player = []
@@ -699,20 +724,10 @@ async def game_starter():
     await asyncio.wait_for(a(),timeout=300)
     await game.start_game()
 
-@app.post("/submit/investment/{player}/")
-async def _(player:str,data:dict):
-    if game.state.phase !=1:
-        return {}
+@app.post("/submit/{type}/{player}/")
+async def _(player:str,type:str,data:dict):
     await game._handle_player_message(player,data)
-    resp = await game.get_server_resp(player,cur_phase="investment")
-    return resp
-
-@app.post("/submit/bidding/{player}")
-async def _(player:str,data:dict):
-    if game.state.phase !=2:
-        return {}
-    await game._handle_player_message(player,data)
-    resp = await game.get_server_resp(player,cur_phase="bidding")
+    resp = await game.get_server_resp(player,cur_phase=type)
     return resp
 
 if __name__ == "__main__":

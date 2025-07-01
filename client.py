@@ -199,6 +199,7 @@ class ResourceIsland:
         self.plsturl = f"http://{server_addr}/playerinfo/{player_name}"
         self.sbmtinvurl = f"http://{server_addr}/submit/investment/{player_name}"
         self.sbmtbidurl = f"http://{server_addr}/submit/bidding/{player_name}"
+        self.sbmtbidwurl = f"http://{server_addr}/submit/bidding_wants/{player_name}"
         self.server_addr = server_addr
         self.o = ColorOutput()
         self.player_name = player_name
@@ -276,7 +277,7 @@ class ResourceIsland:
         self.market = game_state['market']
         self.started = game_state['started']
 
-    async def send(self, message, is_inv:bool):
+    async def send(self, message, is_inv:bool, url:str=None):
         """发送消息到服务器"""
         if not self.websocket:
             self.o.r("未连接到服务器")
@@ -284,7 +285,7 @@ class ResourceIsland:
         try:
             import aiohttp
             async with aiohttp.ClientSession() as session:
-                async with session.post(self.sbmtinvurl if is_inv else self.sbmtbidurl,json=message) as resp:
+                async with session.post(url if url else (self.sbmtinvurl if is_inv else self.sbmtbidurl),json=message) as resp:
                     return await resp.json()
         except Exception as e:
             self.o.r(f"发送消息失败: {e}")
@@ -314,6 +315,10 @@ class ResourceIsland:
                         await self._handle_investment(target['epoch'])
                     if target['phase'] == 2:
                         await self._handle_bidding(target['epoch'])
+                    if target['phase'] == -2:
+                        await self._parse_bidding(target['epoch'])
+                if target['type'] == 'event_choiced':
+                    await self._trigger_event_card(target['epoch'],target['event'])
             if target['type'] == 'bidding_sorted':
                 self.o.b("竞标排序成功，顺序是")
                 self.o.b(target['sorted'])
@@ -362,24 +367,15 @@ class ResourceIsland:
             self.current_deck.extend([card_type] * count)
         random.shuffle(self.current_deck)
 
-    async def _trigger_event_card(self, epoch:int):
+    async def _trigger_event_card(self, epoch:int,event:str):
         await clear()
         await self.display_game_state()
         if epoch not in [3,6,9,13,15,18,21,23,25,27]:
             self.o.b("本轮无需事件卡阶段")
             return
         self.o.b(f"当前是第 {epoch} 轮的特殊阶段事件卡。")
-        event_deck = self.event_deck
-        if epoch in self.event_immunitie:
-            self.o.b("当前海岛掠夺、天降饥荒可豁免")
-            self.o.w(">> 删除海盗掠夺、天降饥荒")
-            while "海盗掠夺" in event_deck:
-                self.event_deck.remove("海盗掠夺")
-            while "天降饥荒" in event_deck:
-                self.event_deck.remove("天降饥荒")
-        self.o.w(">> 正在挑选事件卡")
-        event = random.choice(event_deck)
         self.o.b(f"本轮事件：{event}")
+        self.sync_game_state()
         if event == "火山爆发":
             self.o.w(">> 移除市场上一半资源")
             self.market = self.market[:len(self.market)//2]
@@ -458,35 +454,54 @@ class ResourceIsland:
                     continue
                 self.o.w(f">> 资源 {k} 被拿去许多，价格-1")
                 self.resource_values[k] -= 1
+    async def _handle_bidding_wants(self,epoch:int):
+        await clear()
+        await self.display_game_state()
+        while True:
+            await clear()
+            await self.display_game_state()
+            self.o.w(">> 请输入您想要的资源（编号），输入ok退出")
+            want = await input_("：")
+            if want == "ok":
+                resp = await self.send({"type":"bidding_wants","data":{"player":self.player_name,"want":'ok'}})
+                break
+            want = int(want)
+            if not (0 <= want < len(self.market)):
+                self.o.y("输入错误，请重新输入")
+                continue
+            resp = await self.send({"type":"bidding_wants","data":{"player":self.player_name,"want":want}})
+            if resp['type'] == 'notify':
+                target = resp['target']
+                if target['type'] == "bidding_success":
+                    self.o.g(f"拿取成功")
+            elif resp['type'] == 'error':
+                target = resp['target']
+                if target['type'] == "bidding_error":
+                    self.o.y(f"拿取失败，原因：")
+                    if target['reason'] == 1:
+                        self.o.y("物品被他人拿取")
+                    if target['reason'] == 2:
+                        self.o.y("行动点不足")
 
     async def _handle_bidding(self, epoch:int):
         await clear()
         await self.display_game_state()
         self.o.b(f"现在是第 {epoch} 轮的竞标阶段")
         self.o.w(">> 竞标开始")
-        bids = {"player":self.player_name,"bid":None,"wants":[]}
-        if True:
-            player = self.player_name
-            data = self.players[player]
-            if data['action_points'] == 0:
-                self.o.y(f"玩家 {player} 没有行动点，自动放弃")
+        bids = {"player":self.player_name,"bid":None}
+        player = self.player_name
+        data = self.players[player]
+        if data['action_points'] == 0:
+            self.o.y(f"玩家 {player} 没有行动点，自动放弃")
+            bid = 0
+        else:
             bid = int(await input_(f"玩家 {player}，你的竞标价是："))
             if bid == 0:
                 self.o.w(f"玩家 {player} 放弃竞标")
-            if data['action_points'] < bid:
-                self.o.y("你无法承受此价格，请重新输入")
-                bid = int(await input_(f"玩家 {player}，你的竞标价是："))
-                if bid == 0:
-                    self.o.w(f"玩家 {player} 放弃竞标")
-            while True:
-                await clear()
-                await self.display_game_state()
-                want = await input_("你想要什么（输入名称）")
-                if want in self.market:
-                    bids['wants'].append(want)
-                else :self.o.y("不存在")
-                if want == 'ok':
-                    break
+            elif data['action_points'] < bid:
+                self.o.y("你无法承受此价格，竞标失败，自动放弃")
+                bid = 0
+        bids['bid'] = bid
         resp = await self.send({"type":"bidding","data":bids},is_inv=False)
         self.o.w(">> 您的价格已上交")
         await clear()
@@ -559,18 +574,11 @@ class ResourceIsland:
                     if self.players[player]['action_points'] < 3:
                         self.o.y("你没行动点，建造失败")
                         continue
-                    self.players[player]['action_points'] -= 3
                     building = await input_("你要建造什么建筑：")
                     if building not in self.all_buildings:
                         self.o.y("建筑不存在")
                         continue
-                    else :
-                        if await self._check_can_build(player,building):
-                            resp = await self.send_investment({"3":building})
-                        else:
-                            self.o.y(f"你好像不能建造：")
-                            if input("执意建造？") == "force":
-                                resp = await self.send_investment({"3":building})
+                    resp = await self.send_investment({"3":building})
                 elif action == '8':
                     resp = await self.send_investment('ok')
                     break
@@ -617,15 +625,21 @@ class ResourceIsland:
                             self.o.y("你都挖过了")
                             continue
                         already_mined.append(player)
+                        ores_in_market = [item for item in self.market if item in ['钻石','金币','铁','矿石']]
                         for i in range(2):
-                            self.o.b("当前市场上有以下矿物：" + str(ores))
-                            x = int(await input_("你要拿哪个（输入名称）："))
-                            if not ores:
+                            self.o.b("当前市场上有以下矿物：" + str(ores_in_market))
+                            if not ores_in_market:
                                 self.o.b("市场上没有多余矿物，跳过")
                                 continue
-                            if x >= len(ores):
-                                self.o.y(f"市场没有索引为 {x} 的物品")
-                            wants.append(x)
+                            try:
+                                choice_index = int(await input_("你要拿哪个（输入编号）："))
+                                if not (0 <= choice_index < len(ores_in_market)):
+                                    self.o.y(f"市场没有索引为 {choice_index} 的物品")
+                                    continue
+                                wants.append(ores_in_market[choice_index])
+                            except ValueError:
+                                self.o.y("请输入有效的数字索引。")
+                                continue
                         resp = await self.send_investment({"6":wants})
                     else:
                         self.o.y("你没有矿机挖个蛋")
@@ -722,6 +736,46 @@ class ResourceIsland:
             await clear()
         self.o.g("游戏结束")
         print(await self.get_player_values())
+
+    async def _send_bidding_wants(self, want:int):
+        return await self.send({
+            "type":"bidding_wants",
+            "data":{
+                "player":self.player_name,
+                "want":want
+            }
+        },url=self.sbmtbidwurl,is_inv=False)
+
+    async def _parse_bidding(self, epochs: int):
+        await self.sync_game_state()
+        await clear()
+        await self.display_game_state()
+        self.o.b(f"当前是第{epochs}轮的竞标拿取阶段，现在轮到你拿取了")
+        while True:
+            want = await input_("你要拿取第几个物品？（输入编号），完成请输入ok：")
+            if want == 'ok':
+                await self._send_bidding_wants(want)
+                return
+            want = int(want)
+            if want < 0 or want >= len(self.market):
+                self.o.y("请输入有效的物品编号。")
+                continue
+            res = await self._send_bidding_wants(want)
+            if res['type'] == 'notify':
+                if res['target']['type'] == 'bidding_success':
+                    self.o.g("物品拿取成功")
+                    await self.sync_game_state()
+            elif res['type'] == 'error':
+                target = res['target']
+                match target['reason']:
+                    case 1:
+                        self.o.y("物品不存在")
+                    case 2:
+                        self.o.y("行动点不足，将自动退出")
+                        return
+            await clear()
+            await self.sync_game_state()
+            await self.display_game_state()
 
     async def display_game_state(self):
         """优化后的游戏状态显示方法"""
