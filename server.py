@@ -379,6 +379,8 @@ class Game:
                                                             "reason": 1}})
                         self.state.players[player].action_points += 3
                         return False
+                    await self.send_to(player,{"type": "notify", "target": {"type": "investment_success", "player": player,
+                                                                        "action": action}})
             elif action == '4':
                 if self.state.players[player].action_points < 1:
                     await self.send_to(player,{"type": "error",
