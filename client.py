@@ -802,7 +802,9 @@ global game
 if __name__ == '__main__':
     async def main():
         global game
-        server_addr = "localhost:8000"
+        server_addr = input("请输入你的服务器地址：")
+        if server_addr == '':
+            server_addr = "localhost:8000"
         player_name = await input_("请输入你的玩家名称: ")
         game = ResourceIsland(server_addr, player_name)
         await game.initialize_game()
