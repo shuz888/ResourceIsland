@@ -274,7 +274,7 @@ class ResourceIsland:
         self.market = game_state['market']
         self.started = game_state['started']
 
-    async def send(self, message, is_inv:bool, url:str=None):
+    async def send(self, message, is_inv:bool=False, url:str=None):
         """发送消息到服务器"""
         if not self.websocket:
             self.o.r("未连接到服务器")
