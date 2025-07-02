@@ -159,11 +159,12 @@ class Game:
 
     async def _game_loop(self):
         await self._shuffle_deck()
-        self.state.market.extend(await self._draw_cards(10))
+        self.state.market.extend(await self._draw_cards(20))
         for player in game.state.players.keys():
-            self.state.players[player].resources['食物'] += 5
+            self.state.players[player].resources['食物'] += 10
         await self.broadcast({"type":"notify","target":{"type":"game_start"}})
-        while self.state.epoch <= 30:
+        # while self.state.epoch <= 30: 
+        while True:
             self.state.phase = 1
             if self.state.phase == 1:
                 await self.broadcast({"type": "notify", "target": {"type": "phase_changed","epoch":self.state.epoch,"phase":self.state.phase}})
@@ -357,7 +358,7 @@ class Game:
                 if already_exchanged:
                     return False
                 self.state.players[player].resources['食物'] -= 1
-                self.state.players[player].action_points += 2
+                self.state.players[player].action_points += 3
                 self.state.current_deck.append('食物')
                 await self.send_to(player,{"type": "notify", "target": {"type": "investment_success", "player": player,
                                                                     "action": action}})

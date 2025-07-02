@@ -59,7 +59,6 @@ class GameStatusViewer:
 
     async def show_rank(self):
         self.o.b("\n=== 玩家价值排名 ===")
-        await self.sync_game_state()
         table = [[player,await self._calc_player_value(self.players[player])] for player in self.players.keys()]
         table.sort(key=lambda x:x[1],reverse=True)
         table = tabulate(
@@ -72,8 +71,8 @@ class GameStatusViewer:
         result = 0
         for k,v in data['resources'].items():
             result += self.resource_values[k]*v
-        result += data['money']*1.5
-        result += data['action_points']*0.5
+        result += data['money']*2
+        result += data['action_points']*0.1
         return result
 
     async def sync_game_state(self):
@@ -91,32 +90,37 @@ class GameStatusViewer:
         self.started = game_state['started']
         self.epoch = game_state['epoch']
         self.phase = game_state['phase']
+        self.started = game_state['started']
 
     async def display_game_state(self):
         """优化后的游戏状态显示方法"""
         os.system("cls" if os.name == 'nt' else "clear")
+        await self.sync_game_state()
         self.o.b("=== 游戏状态 ===")
-        self.o.w(f"当前是第{self.epoch}轮的{self.phase}阶段。")
-        # 显示玩家信息（精简版）
-        self.o.b("=== 玩家状态 ===")
-        for player, data in self.players.items():
-            self.o.w(f"{player}: AP={data['action_points']} $={data['money']}", end='')
-            self.o.w(f" 建筑:{data['buildings']}", end='')
-            res = [f"{k[:2]}:{v}" for k, v in data['resources'].items() if v > 0]
-            self.o.w(f" 资源:{','.join(res)}")
+        if self.started:
+            self.o.w(f"当前是第{self.epoch}轮的{self.phase}阶段。")
+            # 显示玩家信息（精简版）
+            self.o.b("=== 玩家状态 ===")
+            for player, data in self.players.items():
+                self.o.w(f"{player}: AP={data['action_points']} $={data['money']}", end='')
+                self.o.w(f" 建筑:{data['buildings']}", end='')
+                res = [f"{k[:2]}:{v}" for k, v in data['resources'].items() if v > 0]
+                self.o.w(f" 资源:{','.join(res)}")
 
-        # 显示资源价值
-        self.o.b("=== 资源价值 ===")
-        await self.show_values()
+            # 显示资源价值
+            self.o.b("=== 资源价值 ===")
+            await self.show_values()
 
-        # 显示市场
-        self.o.b("=== 市场 ===")
-        for i, item in enumerate(self.market):
-            self.o.w(f"{i}: {item}",end=', ')
-        
-        await self.show_rank()
-        # 添加分隔线
-        self.o.b("\n" + "=" * 30 + "\n")
+            # 显示市场
+            self.o.b("=== 市场 ===")
+            for i, item in enumerate(self.market):
+                self.o.w(f"{i}: {item}",end=', ')
+            
+            await self.show_rank()
+            # 添加分隔线
+            self.o.b("\n" + "=" * 30 + "\n")
+        else:
+            self.o.r("游戏未开始!")
 
 if __name__ == '__main__':
     async def main():

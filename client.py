@@ -561,7 +561,7 @@ class ResourceIsland:
                         continue
                     resp = await self.send_investment("1")
                 elif action == '2':
-                    self.o.w(f">> 玩家 {player} 使用1食物兑换行动点*2")
+                    self.o.w(f">> 玩家 {player} 使用1食物兑换行动点*3")
                     if self.players[player]['resources']['食物'] < 1:
                         self.o.y(f"玩家 {player} 食物不足，兑换失败")
                         continue
