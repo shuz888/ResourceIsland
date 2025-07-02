@@ -720,7 +720,7 @@ async def _(ws: WebSocket, player: str):
 
 async def game_starter():
     async def a():
-        while len(game.state.players)!=3:          # 设置人数
+        while len(game.state.players)!=2:          # 设置人数
             await asyncio.sleep(0.1)
         game.state.started = True
         return True
@@ -730,8 +730,11 @@ async def game_starter():
 @app.post("/submit/{type}/{player}/")
 async def _(player:str,type:str,data:dict):
     await game._handle_player_message(player,data)
-    resp = await game.get_server_resp(player,cur_phase=type)
-    return resp
+    try:
+        resp = await asyncio.wait_for(game.get_server_resp(player,cur_phase=type),timeout=10)
+        return resp
+    except asyncio.TimeoutError:
+        return {}
 
 if __name__ == "__main__":
     Thread(target=lambda: asyncio.run(game_starter()),name="game_starter",daemon=True).start()
