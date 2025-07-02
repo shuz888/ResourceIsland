@@ -720,7 +720,7 @@ async def _(ws: WebSocket, player: str):
 
 async def game_starter():
     async def a():
-        while len(game.state.players)!=2:          # 设置人数
+        while len(game.state.players)!=3:          # 设置人数
             await asyncio.sleep(0.1)
         game.state.started = True
         return True

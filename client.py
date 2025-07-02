@@ -266,11 +266,14 @@ class ResourceIsland:
         all_player_state = [await self.fetch_url(f"http://{self.server_addr}/playerinfo/{name}") for name in all_player]
         self.resource_values = game_state['values']
         self.players = {name: {
-                'resources': state['resources'],
+                'resources': defaultdict(int),
                 'action_points': state['action_points'],
                 'buildings': state['buildings'],
                 'money': state['bank_money'],
             } for name,state in zip(all_player,all_player_state)}
+        for i in range(len(all_player)):
+            for x in all_player_state[i]['resources']:
+                self.players[all_player[i]]['resources'][x] = all_player_state[i]['resources'][x]
         self.market = game_state['market']
         self.started = game_state['started']
 
