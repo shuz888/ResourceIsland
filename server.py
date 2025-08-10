@@ -326,7 +326,7 @@ class Game:
                     self.state.market.remove("木材")
             if "高级伐木场" in self.state.players[player].buildings:
                 await self.send_to(player,{"type":"notify","target":{"type":"building_worked","player":player,"building":"高级伐木场"}})
-                if self.state.current_deck.count("木材") <2:
+                if self.state.current_deck.count("木材") >=2:
                     self.state.players[player].resources['木材'] +=2
                     self.state.current_deck.remove("木材")
                     self.state.current_deck.remove("木材")
